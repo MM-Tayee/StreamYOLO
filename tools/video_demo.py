@@ -51,6 +51,18 @@ def parse_args():
     return parser.parse_args()
 
 
+ARGOVERSE_CLASSES = [
+    "person",
+    "bicycle",
+    "car",
+    "motorcycle",
+    "bus",
+    "truck",
+    "traffic_light",
+    "stop_sign",
+]
+
+
 def preproc(img, input_size, swap=(2, 0, 1)):
     if len(img.shape) == 3:
         padded_img = np.ones((input_size[0], input_size[1], 3), dtype=np.uint8) * 114
@@ -113,9 +125,17 @@ def visual(output, img, ratio, cls_conf=0.35):
 
         color = (0, 255, 0)
         cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
+
+        label_name = (
+            ARGOVERSE_CLASSES[cls_id]
+            if cls_id < len(ARGOVERSE_CLASSES)
+            else f"ID {cls_id}"
+        )
+        label_text = f"{label_name}: {score:.2f}"
+
         cv2.putText(
             img,
-            f"{cls_id}: {score:.2f}",
+            label_text,
             (x0, y0 - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
