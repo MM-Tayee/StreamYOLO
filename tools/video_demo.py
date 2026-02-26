@@ -8,19 +8,48 @@ from yolox.exp import get_exp
 from yolox.utils import fuse_model
 from torchvision.ops import batched_nms
 
+
 def parse_args():
     parser = argparse.ArgumentParser("StreamYOLO Video Demo")
-    parser.add_argument("-f", "--exp_file", default=None, type=str, help="pls input your experiment description file")
+    parser.add_argument(
+        "-f",
+        "--exp_file",
+        default=None,
+        type=str,
+        help="pls input your experiment description file",
+    )
     parser.add_argument("-c", "--ckpt", default=None, type=str, help="ckpt for eval")
     parser.add_argument("--path", default="./assets/dog.mp4", help="path to video")
     parser.add_argument("--conf", default=0.25, type=float, help="test conf")
     parser.add_argument("--nms", default=0.45, type=float, help="test nms threshold")
     parser.add_argument("--tsize", default=None, type=int, help="test img size")
-    parser.add_argument("--fp16", dest="fp16", action="store_true", help="Adopting mix precision evaluating")
-    parser.add_argument("--fuse", dest="fuse", action="store_true", help="Fuse conv and bn for testing.")
-    parser.add_argument("--device", default="gpu", type=str, help="device to run our model, can either be cpu or gpu")
-    parser.add_argument("--save_result", action="store_true", help="whether to save the inference result of image/video")
+    parser.add_argument(
+        "--fp16",
+        dest="fp16",
+        action="store_true",
+        help="Adopting mix precision evaluating",
+    )
+    parser.add_argument(
+        "--fuse", dest="fuse", action="store_true", help="Fuse conv and bn for testing."
+    )
+    parser.add_argument(
+        "--device",
+        default="gpu",
+        type=str,
+        help="device to run our model, can either be cpu or gpu",
+    )
+    parser.add_argument(
+        "--save_result",
+        action="store_true",
+        help="whether to save the inference result of image/video",
+    )
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="whether to show the inference result in a window",
+    )
     return parser.parse_args()
+
 
 def preproc(img, input_size, swap=(2, 0, 1)):
     if len(img.shape) == 3:
@@ -40,6 +69,7 @@ def preproc(img, input_size, swap=(2, 0, 1)):
     padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
     return padded_img, r
 
+
 def inference(outputs, conf_thre=0.01, nms_thresh=0.65):
     box_corner = outputs.new(outputs.shape)
     box_corner[:, 0] = outputs[:, 0] - outputs[:, 2] / 2
@@ -50,7 +80,7 @@ def inference(outputs, conf_thre=0.01, nms_thresh=0.65):
 
     class_conf, class_pred = torch.max(outputs[:, 5:], 1, keepdim=True)
     conf_mask = (outputs[:, 4] * class_conf.squeeze() >= conf_thre).squeeze()
-    detections = torch.cat((outputs[:, :4], outputs[:, 4:5], class_conf, class_pred.float()), 1)
+    detections = torch.cat((outputs[:, :5], class_conf, class_pred.float()), 1)
     detections = detections[conf_mask]
 
     nms_out_index = batched_nms(
@@ -62,6 +92,7 @@ def inference(outputs, conf_thre=0.01, nms_thresh=0.65):
 
     detections = detections[nms_out_index]
     return detections
+
 
 def visual(output, img, ratio, cls_conf=0.35):
     bboxes = output[:, 0:4]
@@ -82,13 +113,22 @@ def visual(output, img, ratio, cls_conf=0.35):
 
         color = (0, 255, 0)
         cv2.rectangle(img, (x0, y0), (x1, y1), color, 2)
-        cv2.putText(img, f'{cls_id}: {score:.2f}', (x0, y0 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.putText(
+            img,
+            f"{cls_id}: {score:.2f}",
+            (x0, y0 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
     return img
+
 
 def main():
     args = parse_args()
     exp = get_exp(args.exp_file, None)
-    
+
     if args.tsize is not None:
         exp.test_size = (args.tsize, args.tsize)
 
@@ -99,10 +139,10 @@ def main():
 
     ckpt = torch.load(args.ckpt, map_location="cpu")
     model.load_state_dict(ckpt["model"])
-    
+
     if args.fuse:
         model = fuse_model(model)
-    
+
     if args.fp16:
         model.half()
 
@@ -110,7 +150,7 @@ def main():
     width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
     height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     fps = cap.get(cv2.CAP_PROP_FPS)
-    
+
     if args.save_result:
         os.makedirs("./show_results", exist_ok=True)
         save_path = os.path.join("./show_results", os.path.basename(args.path))
@@ -120,7 +160,7 @@ def main():
 
     buffer = None
     input_size = exp.test_size
-    
+
     # Warmup
     print("Warming up...")
     tmp_img = torch.zeros(1, 3, input_size[0], input_size[1])
@@ -129,14 +169,14 @@ def main():
     if args.fp16:
         tmp_img = tmp_img.half()
     for _ in range(10):
-        _ = model(tmp_img, buffer=None, mode='on_pipe')
+        _ = model(tmp_img, buffer=None, mode="on_pipe")
 
     print("Starting inference...")
     while True:
-        ret, frame = cap.get(cv2.CAP_PROP_FRAME_COUNT), cap.read()[1]
-        if frame is None:
+        ret, frame = cap.read()
+        if not ret:
             break
-        
+
         img, ratio = preproc(frame, input_size)
         img = torch.from_numpy(img).unsqueeze(0)
         if args.device == "gpu":
@@ -145,20 +185,27 @@ def main():
             img = img.half()
 
         with torch.no_grad():
-            outputs, buffer = model(img, buffer=buffer, mode='on_pipe')
-            outputs = inference(outputs, exp.test_conf, exp.nmsthre)
-        
+            outputs, buffer = model(img, buffer=buffer, mode="on_pipe")
+            outputs = inference(outputs[0], exp.test_conf, exp.nmsthre)
+
         if args.save_result:
             result_frame = visual(outputs, frame, ratio, args.conf)
             vid_writer.write(result_frame)
+            if args.show:
+                cv2.imshow("StreamYOLO", result_frame)
+                if cv2.waitKey(1) == ord("q"):
+                    break
+        elif args.show:
+            result_frame = visual(outputs, frame, ratio, args.conf)
             cv2.imshow("StreamYOLO", result_frame)
-            if cv2.waitKey(1) == ord('q'):
+            if cv2.waitKey(1) == ord("q"):
                 break
-        
+
     cap.release()
     if args.save_result:
         vid_writer.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()
